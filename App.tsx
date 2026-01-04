@@ -13,9 +13,13 @@ import {
 import RNFS from 'react-native-fs';
 import 'react-native-get-random-values';
 
+
 // Node instance needs to be kept outside render cycle or in a ref.
 // Keeping it simple here as a module variable for this Hello World.
 let runningNode: any = null;
+
+// Generate a random port between 10000 and 60000 to avoid "Address in use" conflicts during hot-reload
+const getRandomPort = () => Math.floor(Math.random() * (60000 - 10000 + 1) + 10000);
 
 function App(): React.JSX.Element {
   const [nodeId, setNodeId] = useState<string>('초기화 안됨 (Not initialized)');
@@ -51,7 +55,7 @@ function App(): React.JSX.Element {
         path,
         logPath,
         'testnet',
-        [] // listeningAddress
+        [{ ip: '127.0.0.1', port: Math.floor(Math.random() * (60000 - 10000 + 1) + 10000) }] as any
       );
 
       // Esplora를 사용하여 블록체인 데이터 동기화
@@ -59,13 +63,13 @@ function App(): React.JSX.Element {
       await builder.fromConfig(config);
 
       // builder.setNetwork/StoragePath는 Config에서 이미 설정됨
-      await builder.setEsploraServer('https://blockstream.info/testnet/api');
+      await builder.setEsploraServer('https://mempool.space/testnet/api');
       await builder.setGossipSourceRgs('https://rapidsync.lightningdevkit.org/testnet/snapshot');
 
       const node = await builder.build();
       addLog('✅ 노드 빌드 완료');
 
-      // 3. 노드 시작
+      // 3. 작
       await node.start();
       runningNode = node;
 
