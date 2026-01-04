@@ -26,6 +26,10 @@ function App(): React.JSX.Element {
   const [status, setStatus] = useState<string>('중지됨 (Stopped)');
   const [logs, setLogs] = useState<string[]>([]);
   const [invoice, setInvoice] = useState<string>('');
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  // On-chain Wallet State
+  const [onChainAddress, setOnChainAddress] = useState<string>('');
+  const [balance, setBalance] = useState<string>('0');
 
   const addLog = (msg: string) => {
     console.log(msg);
@@ -91,10 +95,17 @@ function App(): React.JSX.Element {
   };
 
   const syncNode = async () => {
-    if (!runningNode) return;
+    if (!runningNode || isSyncing) return;
     try {
+      setIsSyncing(true);
       addLog('🔄 지갑 동기화 중...');
       await runningNode.syncWallets();
+
+      // 잔액 업데이트
+      const totalBalance = await runningNode.totalOnchainBalanceSats();
+      const spendableBalance = await runningNode.spendableOnchainBalanceSats();
+      setBalance(`${spendableBalance} / ${totalBalance} sats`);
+      addLog(`💰 잔액: ${spendableBalance} (사용가능) / ${totalBalance} (총합)`);
 
       const channels = await runningNode.listChannels();
       addLog(`📡 채널 수: ${channels.length}`);
@@ -102,6 +113,26 @@ function App(): React.JSX.Element {
       addLog('✅ 동기화 완료');
     } catch (e: any) {
       addLog(`❌ 동기화 오류: ${e.message}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const getAddress = async () => {
+    if (!runningNode) {
+      Alert.alert('오류', '먼저 노드를 시작해주세요.');
+      return;
+    }
+    try {
+      const addrObj = await runningNode.newOnchainAddress();
+      console.log('Address Object:', addrObj);
+      // addrObj might be an object wrapping the string.
+      // Based on Bindings.ts, Address class has addressHex property.
+      const addrStr = addrObj.addressHex || addrObj.toString();
+      setOnChainAddress(addrStr);
+      addLog(`📬 새 주소: ${addrStr}`);
+    } catch (e: any) {
+      addLog(`❌ 주소 생성 실패: ${e.message}`);
     }
   };
 
@@ -141,6 +172,19 @@ function App(): React.JSX.Element {
           <Text style={styles.nodeId} selectable>{nodeId}</Text>
         </View>
 
+        <View style={styles.card}>
+          <Text style={styles.label}>3. 온체인 지갑 (Testnet Funding)</Text>
+          <Text style={styles.label}>잔액 (Spendable / Total):</Text>
+          <Text style={styles.value}>{balance}</Text>
+
+          <Text style={[styles.label, { marginTop: 10 }]}>입금 주소:</Text>
+          <Text style={styles.nodeId} selectable>{onChainAddress || '(버튼을 눌러 주소 생성)'}</Text>
+
+          <TouchableOpacity style={[styles.button, { marginTop: 10, padding: 10 }]} onPress={getAddress} disabled={!status.includes('Running')}>
+            <Text style={styles.buttonText}>새 주소 발급</Text>
+          </TouchableOpacity>
+        </View>
+
         {invoice ? (
           <View style={styles.card}>
             <Text style={styles.label}>인보이스 (복사해서 지불하세요)</Text>
@@ -153,8 +197,8 @@ function App(): React.JSX.Element {
             <Text style={styles.buttonText}>{status.includes('Running') ? '노드 실행 중' : '노드 시작 (Start Node)'}</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={[styles.button, styles.secondaryButton]} onPress={syncNode} disabled={!status.includes('Running')}>
-            <Text style={styles.secondaryButtonText}>동기화 (Sync)</Text>
+          <TouchableOpacity style={[styles.button, styles.secondaryButton]} onPress={syncNode} disabled={!status.includes('Running') || isSyncing}>
+            <Text style={styles.secondaryButtonText}>{isSyncing ? '동기화 중...' : '동기화 (Sync)'}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={[styles.button, styles.actionButton]} onPress={receivePayment} disabled={!status.includes('Running')}>
