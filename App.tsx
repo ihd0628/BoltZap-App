@@ -1,27 +1,19 @@
-import { Builder, Config } from 'ldk-node-rn';
-import React, { useState } from 'react';
-import {
-  Alert,
-  SafeAreaView,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
-import RNFS from 'react-native-fs';
 import 'react-native-get-random-values';
 
+import Clipboard from '@react-native-clipboard/clipboard';
+import { Builder, Config, type Node } from 'ldk-node-rn';
+import { type Address, NetAddress } from 'ldk-node-rn/src/classes/Bindings';
+import React, { useState } from 'react';
+import { Alert, StatusBar } from 'react-native';
+import RNFS from 'react-native-fs';
+
+import * as S from './App.style';
 
 // Node instance needs to be kept outside render cycle or in a ref.
 // Keeping it simple here as a module variable for this Hello World.
-let runningNode: any = null;
+let runningNode: Node | null = null;
 
-// Generate a random port between 10000 and 60000 to avoid "Address in use" conflicts during hot-reload
-const getRandomPort = () => Math.floor(Math.random() * (60000 - 10000 + 1) + 10000);
-
-function App(): React.JSX.Element {
+const App = (): React.JSX.Element => {
   const [nodeId, setNodeId] = useState<string>('초기화 안됨 (Not initialized)');
   const [status, setStatus] = useState<string>('중지됨 (Stopped)');
   const [logs, setLogs] = useState<string[]>([]);
@@ -33,7 +25,7 @@ function App(): React.JSX.Element {
 
   const addLog = (msg: string) => {
     console.log(msg);
-    setLogs(prev => [msg, ...prev]);
+    setLogs((prev) => [msg, ...prev]);
   };
 
   const initNode = async () => {
@@ -55,12 +47,11 @@ function App(): React.JSX.Element {
       // 2. 노드 빌드 (테스트넷)
       // v0.3.x 이상에서는 Config 객체를 먼저 생성해야 합니다.
       const config = new Config();
-      await config.create(
-        path,
-        logPath,
-        'testnet',
-        [{ ip: '127.0.0.1', port: Math.floor(Math.random() * (60000 - 10000 + 1) + 10000) }] as any
+      const listeningAddr = new NetAddress(
+        '127.0.0.1',
+        Math.floor(Math.random() * (60000 - 10000 + 1) + 10000),
       );
+      await config.create(path, logPath, 'testnet', [listeningAddr]);
 
       // Esplora를 사용하여 블록체인 데이터 동기화
       const builder = new Builder();
@@ -68,7 +59,9 @@ function App(): React.JSX.Element {
 
       // builder.setNetwork/StoragePath는 Config에서 이미 설정됨
       await builder.setEsploraServer('https://mempool.space/testnet/api');
-      await builder.setGossipSourceRgs('https://rapidsync.lightningdevkit.org/testnet/snapshot');
+      await builder.setGossipSourceRgs(
+        'https://rapidsync.lightningdevkit.org/testnet/snapshot',
+      );
 
       const node = await builder.build();
       addLog('✅ 노드 빌드 완료');
@@ -86,11 +79,12 @@ function App(): React.JSX.Element {
       addLog(`🆔 노드 ID: ${info.keyHex}`);
 
       await syncNode();
-
-    } catch (e: any) {
-      console.error(e);
-      addLog(`❌ 오류: ${e.message}`);
-      Alert.alert('오류', e.message);
+    } catch (e: unknown) {
+      if (e instanceof Error) {
+        console.error(e);
+        addLog(`❌ 오류: ${e.message}`);
+        Alert.alert('오류', e.message);
+      }
     }
   };
 
@@ -105,14 +99,18 @@ function App(): React.JSX.Element {
       const totalBalance = await runningNode.totalOnchainBalanceSats();
       const spendableBalance = await runningNode.spendableOnchainBalanceSats();
       setBalance(`${spendableBalance} / ${totalBalance} sats`);
-      addLog(`💰 잔액: ${spendableBalance} (사용가능) / ${totalBalance} (총합)`);
+      addLog(
+        `💰 잔액: ${spendableBalance} (사용가능) / ${totalBalance} (총합)`,
+      );
 
       const channels = await runningNode.listChannels();
       addLog(`📡 채널 수: ${channels.length}`);
 
       addLog('✅ 동기화 완료');
-    } catch (e: any) {
-      addLog(`❌ 동기화 오류: ${e.message}`);
+    } catch (e: unknown) {
+      if (e instanceof Error) {
+        addLog(`❌ 동기화 오류: ${e.message}`);
+      }
     } finally {
       setIsSyncing(false);
     }
@@ -124,15 +122,25 @@ function App(): React.JSX.Element {
       return;
     }
     try {
-      const addrObj = await runningNode.newOnchainAddress();
+      const addrObj: Address = await runningNode.newOnchainAddress();
       console.log('Address Object:', addrObj);
       // addrObj might be an object wrapping the string.
       // Based on Bindings.ts, Address class has addressHex property.
       const addrStr = addrObj.addressHex || addrObj.toString();
       setOnChainAddress(addrStr);
       addLog(`📬 새 주소: ${addrStr}`);
-    } catch (e: any) {
-      addLog(`❌ 주소 생성 실패: ${e.message}`);
+
+      // check if clipboard is working
+      try {
+        Clipboard.setString(addrStr);
+        Alert.alert('주소 복사됨', '클립보드에 복사되었습니다.');
+      } catch (e) {
+        console.log('Clipboard error', e);
+      }
+    } catch (e: unknown) {
+      if (e instanceof Error) {
+        addLog(`❌ 주소 생성 실패: ${e.message}`);
+      }
     }
   };
 
@@ -143,179 +151,107 @@ function App(): React.JSX.Element {
       // receivePayment takes amount in msats. 1 sat = 1000 msats.
       const amountMsat = 1000 * 1000;
       const expirySecs = 3600;
-      const description = "BoltZap Test Invoice";
+      const description = 'BoltZap Test Invoice';
 
-      const inv = await runningNode.receivePayment(amountMsat, description, expirySecs);
+      const inv = await runningNode.receivePayment(
+        amountMsat,
+        description,
+        expirySecs,
+      );
       setInvoice(inv);
       addLog(`🧾 인보이스 생성 완료!`);
-    } catch (e: any) {
-      addLog(`❌ 인보이스 오류: ${e.message}`);
+    } catch (e: unknown) {
+      if (e instanceof Error) {
+        addLog(`❌ 인보이스 오류: ${e.message}`);
+      }
     }
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <S.Container>
       <StatusBar barStyle="dark-content" />
-      <View style={styles.header}>
-        <Text style={styles.title}>BoltZap ⚡</Text>
-        <Text style={styles.subtitle}>React Native + LDK Node</Text>
-      </View>
+      <S.Header>
+        <S.Title>BoltZap ⚡</S.Title>
+        <S.SubTitle>React Native + LDK Node</S.SubTitle>
+      </S.Header>
 
-      <ScrollView style={styles.content}>
-        <View style={styles.card}>
-          <Text style={styles.label}>상태 (Status)</Text>
-          <Text style={styles.value}>{status}</Text>
-        </View>
+      <S.Content>
+        <S.Card>
+          <S.Label>상태 (Status)</S.Label>
+          <S.Value>{status}</S.Value>
+        </S.Card>
 
-        <View style={styles.card}>
-          <Text style={styles.label}>노드 ID</Text>
-          <Text style={styles.nodeId} selectable>{nodeId}</Text>
-        </View>
+        <S.Card>
+          <S.Label>노드 ID</S.Label>
+          <S.NodeId selectable>{nodeId}</S.NodeId>
+        </S.Card>
 
-        <View style={styles.card}>
-          <Text style={styles.label}>3. 온체인 지갑 (Testnet Funding)</Text>
-          <Text style={styles.label}>잔액 (Spendable / Total):</Text>
-          <Text style={styles.value}>{balance}</Text>
+        <S.Card>
+          <S.Label>3. 온체인 지갑 (Testnet Funding)</S.Label>
+          <S.Label>잔액 (Spendable / Total):</S.Label>
+          <S.Value>{balance}</S.Value>
 
-          <Text style={[styles.label, { marginTop: 10 }]}>입금 주소:</Text>
-          <Text style={styles.nodeId} selectable>{onChainAddress || '(버튼을 눌러 주소 생성)'}</Text>
+          <S.Label style={{ marginTop: 10 }}>입금 주소:</S.Label>
+          <S.AddressContainer>
+            <S.AddressValue selectable>
+              {onChainAddress || '(버튼을 눌러 주소 생성)'}
+            </S.AddressValue>
+          </S.AddressContainer>
 
-          <TouchableOpacity style={[styles.button, { marginTop: 10, padding: 10 }]} onPress={getAddress} disabled={!status.includes('Running')}>
-            <Text style={styles.buttonText}>새 주소 발급</Text>
-          </TouchableOpacity>
-        </View>
+          <S.Button
+            disabled={!status.includes('Running')}
+            onPress={getAddress}
+            style={{ marginTop: 10 }}
+            variant="secondary"
+          >
+            <S.ButtonText variant="secondary">새 주소 발급</S.ButtonText>
+          </S.Button>
+        </S.Card>
 
         {invoice ? (
-          <View style={styles.card}>
-            <Text style={styles.label}>인보이스 (복사해서 지불하세요)</Text>
-            <Text style={styles.invoice} selectable>{invoice}</Text>
-          </View>
+          <S.Card>
+            <S.Label>인보이스 (복사해서 지불하세요)</S.Label>
+            <S.Invoice selectable>{invoice}</S.Invoice>
+          </S.Card>
         ) : null}
 
-        <View style={styles.buttonContainer}>
-          <TouchableOpacity style={styles.button} onPress={initNode} disabled={status.includes('Running')}>
-            <Text style={styles.buttonText}>{status.includes('Running') ? '노드 실행 중' : '노드 시작 (Start Node)'}</Text>
-          </TouchableOpacity>
+        <S.ButtonContainer>
+          <S.Button onPress={initNode} disabled={status.includes('Running')}>
+            <S.ButtonText variant="primary">
+              {status.includes('Running')
+                ? '노드 실행 중'
+                : '노드 시작 (Start Node)'}
+            </S.ButtonText>
+          </S.Button>
 
-          <TouchableOpacity style={[styles.button, styles.secondaryButton]} onPress={syncNode} disabled={!status.includes('Running') || isSyncing}>
-            <Text style={styles.secondaryButtonText}>{isSyncing ? '동기화 중...' : '동기화 (Sync)'}</Text>
-          </TouchableOpacity>
+          <S.Button
+            variant="secondary"
+            onPress={syncNode}
+            disabled={!status.includes('Running') || isSyncing}
+          >
+            <S.ButtonText variant="secondary">
+              {isSyncing ? '동기화 중...' : '동기화 (Sync)'}
+            </S.ButtonText>
+          </S.Button>
 
-          <TouchableOpacity style={[styles.button, styles.actionButton]} onPress={receivePayment} disabled={!status.includes('Running')}>
-            <Text style={styles.buttonText}>1000 Sats 받기</Text>
-          </TouchableOpacity>
-        </View>
+          <S.Button
+            variant="success"
+            onPress={receivePayment}
+            disabled={!status.includes('Running')}
+          >
+            <S.ButtonText variant="primary">1000 Sats 받기</S.ButtonText>
+          </S.Button>
+        </S.ButtonContainer>
 
-        <View style={styles.logs}>
-          <Text style={styles.logTitle}>로그 (Logs):</Text>
+        <S.Logs>
+          <S.LogTitle>로그 (Logs):</S.LogTitle>
           {logs.map((log, i) => (
-            <Text key={i} style={styles.logText}>{log}</Text>
+            <S.LogText key={i}>{log}</S.LogText>
           ))}
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+        </S.Logs>
+      </S.Content>
+    </S.Container>
   );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F5F5F5',
-  },
-  header: {
-    padding: 20,
-    backgroundColor: '#FF9900', // Bitcoin Orange
-    alignItems: 'center',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: 'white',
-  },
-  subtitle: {
-    color: 'rgba(255,255,255,0.9)',
-    marginTop: 5,
-  },
-  content: {
-    flex: 1,
-    padding: 20,
-  },
-  card: {
-    backgroundColor: 'white',
-    padding: 15,
-    borderRadius: 10,
-    marginBottom: 15,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-  },
-  label: {
-    fontSize: 12,
-    color: '#666',
-    marginBottom: 5,
-    textTransform: 'uppercase',
-  },
-  value: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
-  },
-  nodeId: {
-    fontSize: 12,
-    color: '#333',
-    fontFamily: 'Courier',
-  },
-  invoice: {
-    fontSize: 10,
-    color: '#333',
-    fontFamily: 'Courier',
-    marginTop: 5,
-  },
-  buttonContainer: {
-    gap: 10,
-    marginBottom: 20,
-  },
-  button: {
-    backgroundColor: '#333',
-    padding: 15,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  secondaryButton: {
-    backgroundColor: 'white',
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  actionButton: {
-    backgroundColor: '#27ae60',
-  },
-  buttonText: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-  secondaryButtonText: {
-    color: '#333',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-  logs: {
-    marginTop: 20,
-    padding: 10,
-    backgroundColor: '#E0E0E0',
-    borderRadius: 5,
-  },
-  logTitle: {
-    fontWeight: 'bold',
-    marginBottom: 5,
-  },
-  logText: {
-    fontSize: 10,
-    fontFamily: 'Courier',
-    marginBottom: 2,
-  },
-});
+};
 
 export default App;
