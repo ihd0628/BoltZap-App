@@ -2,7 +2,11 @@ import 'react-native-get-random-values';
 
 import Clipboard from '@react-native-clipboard/clipboard';
 import { Builder, Config, type Node } from 'ldk-node-rn';
-import { type Address, NetAddress } from 'ldk-node-rn/src/classes/Bindings';
+import {
+  type Address,
+  type ChannelDetails,
+  NetAddress,
+} from 'ldk-node-rn/lib/classes/Bindings';
 import React, { useState } from 'react';
 import { Alert, StatusBar } from 'react-native';
 import RNFS from 'react-native-fs';
@@ -23,9 +27,18 @@ const App = (): React.JSX.Element => {
   const [onChainAddress, setOnChainAddress] = useState<string>('');
   const [balance, setBalance] = useState<string>('0');
 
+  // Channel State
+  const [peerNodeId, setPeerNodeId] = useState<string>(
+    '038863cf8ab91046230f561cd5b386cbff8309fa02e3f0c3ed161a3aeb64a643b9',
+  ); // Default: aranguren.org (Top Testnet Node)
+  const [peerAddress, setPeerAddress] = useState<string>('203.132.94.196:9735');
+  const [channelAmount, setChannelAmount] = useState<string>('20000');
+  const [channels, setChannels] = useState<ChannelDetails[]>([]);
+  const [invoiceToSend, setInvoiceToSend] = useState<string>('');
+
   const addLog = (msg: string) => {
     console.log(msg);
-    setLogs((prev) => [msg, ...prev]);
+    setLogs(prev => [msg, ...prev]);
   };
 
   const initNode = async () => {
@@ -95,6 +108,8 @@ const App = (): React.JSX.Element => {
       addLog('🔄 지갑 동기화 중...');
       await runningNode.syncWallets();
 
+      console.log('runningNode : ', runningNode);
+
       // 잔액 업데이트
       const totalBalance = await runningNode.totalOnchainBalanceSats();
       const spendableBalance = await runningNode.spendableOnchainBalanceSats();
@@ -103,8 +118,13 @@ const App = (): React.JSX.Element => {
         `💰 잔액: ${spendableBalance} (사용가능) / ${totalBalance} (총합)`,
       );
 
-      const channels = await runningNode.listChannels();
-      addLog(`📡 채널 수: ${channels.length}`);
+      // 채널 목록 업데이트
+      const chs = await runningNode.listChannels();
+
+      console.log('chs : ', chs);
+
+      setChannels(chs);
+      addLog(`📡 채널 수: ${chs.length}`);
 
       addLog('✅ 동기화 완료');
     } catch (e: unknown) {
@@ -144,6 +164,61 @@ const App = (): React.JSX.Element => {
     }
   };
 
+  const connectPeer = async () => {
+    if (!runningNode) return;
+    if (!peerNodeId || !peerAddress) {
+      Alert.alert('입력 오류', 'Node ID와 주소를 입력해주세요.');
+      return;
+    }
+    try {
+      const trimmedNodeId = peerNodeId.trim();
+      console.log('trimmedNodeId. : ', trimmedNodeId);
+      addLog(`🔗 피어 연결 시도: ${peerAddress}`);
+      const [ip, port] = peerAddress.split(':');
+      const netAddr = new NetAddress(ip, parseInt(port, 10));
+      console.log('netAddr : ', netAddr);
+      await runningNode.connect(trimmedNodeId, netAddr, true); // true = persist
+      addLog('✅ 피어 연결 성공!');
+      Alert.alert('성공', '피어와 연결되었습니다.');
+    } catch (e: unknown) {
+      if (e instanceof Error) {
+        addLog(`❌ 연결 실패: ${e.message}`);
+        Alert.alert('오류', e.message);
+      }
+    }
+  };
+
+  const openChannel = async () => {
+    if (!runningNode) return;
+    try {
+      const amount = parseInt(channelAmount, 10);
+      if (isNaN(amount) || amount <= 0) {
+        Alert.alert('오류', '올바른 금액을 입력해주세요.');
+        return;
+      }
+      addLog(`Open Channel... ${amount} sats`);
+      const [ip, port] = peerAddress.split(':');
+      const netAddr = new NetAddress(ip, parseInt(port, 10));
+
+      const trimmedNodeId = peerNodeId.trim();
+      await runningNode.connectOpenChannel(
+        trimmedNodeId,
+        netAddr,
+        amount,
+        0, // push_to_counterparty_msat
+        undefined, // channel_config
+        true, // announce_channel
+      );
+      addLog('✅ 채널 오픈 요청 완료! (블록 승인 대기 필요)');
+      await syncNode();
+    } catch (e: unknown) {
+      if (e instanceof Error) {
+        addLog(`❌ 채널 오픈 실패: ${e.message}`);
+        Alert.alert('오류', e.message);
+      }
+    }
+  };
+
   const receivePayment = async () => {
     if (!runningNode) return;
     try {
@@ -158,11 +233,33 @@ const App = (): React.JSX.Element => {
         description,
         expirySecs,
       );
+      console.log('inv : ', inv);
       setInvoice(inv);
       addLog(`🧾 인보이스 생성 완료!`);
     } catch (e: unknown) {
       if (e instanceof Error) {
         addLog(`❌ 인보이스 오류: ${e.message}`);
+      }
+    }
+  };
+
+  const sendPayment = async () => {
+    if (!runningNode) return;
+    if (!invoiceToSend.trim()) {
+      Alert.alert('오류', '인보이스를 입력해주세요.');
+      return;
+    }
+    try {
+      addLog('⚡ 결제 전송 중...');
+      const paymentHash = await runningNode.sendPayment(invoiceToSend.trim());
+      addLog(`✅ 결제 성공! Hash: ${paymentHash.field0.substring(0, 16)}...`);
+      Alert.alert('성공', '결제가 완료되었습니다!');
+      setInvoiceToSend('');
+      await syncNode(); // 잔액 업데이트
+    } catch (e: unknown) {
+      if (e instanceof Error) {
+        addLog(`❌ 결제 실패: ${e.message}`);
+        Alert.alert('오류', e.message);
       }
     }
   };
@@ -208,12 +305,87 @@ const App = (): React.JSX.Element => {
           </S.Button>
         </S.Card>
 
+        <S.Card>
+          <S.SectionTitle>4. 채널 관리 (Channel Management)</S.SectionTitle>
+          <S.Label>Peer Node ID:</S.Label>
+          <S.Input
+            value={peerNodeId}
+            onChangeText={setPeerNodeId}
+            placeholder="Node ID"
+          />
+          <S.Label>Peer Address (IP:Port):</S.Label>
+          <S.Input
+            value={peerAddress}
+            onChangeText={setPeerAddress}
+            placeholder="IP:Port"
+          />
+          <S.Button
+            onPress={connectPeer}
+            disabled={!status.includes('Running')}
+            style={{ marginBottom: 10 }}
+          >
+            <S.ButtonText variant="primary">피어 연결 (Connect)</S.ButtonText>
+          </S.Button>
+
+          <S.Label>Channel Amount (Sats):</S.Label>
+          <S.Input
+            value={channelAmount}
+            onChangeText={setChannelAmount}
+            keyboardType="numeric"
+            placeholder="Amount (sats)"
+          />
+          <S.Button
+            onPress={openChannel}
+            disabled={!status.includes('Running')}
+            variant="success"
+          >
+            <S.ButtonText variant="primary">
+              채널 열기 (Open Channel)
+            </S.ButtonText>
+          </S.Button>
+
+          <S.Label style={{ marginTop: 20 }}>
+            내 채널 목록 ({channels.length})
+          </S.Label>
+          {channels.map((ch, idx) => (
+            <S.ChannelItem key={idx}>
+              <S.Label>
+                ID: {ch.channelId.channelIdHex.substring(0, 10)}...
+              </S.Label>
+              <S.Label>
+                Capacity: {ch.channelValueSats} sats / Usable:{' '}
+                {ch.outboundCapacityMsat / 1000} sats
+              </S.Label>
+              <S.Label>Ready: {ch.isChannelReady ? 'YES ✅' : 'NO ⏳'}</S.Label>
+            </S.ChannelItem>
+          ))}
+        </S.Card>
+
         {invoice ? (
           <S.Card>
             <S.Label>인보이스 (복사해서 지불하세요)</S.Label>
             <S.Invoice selectable>{invoice}</S.Invoice>
           </S.Card>
         ) : null}
+
+        <S.Card>
+          <S.SectionTitle>5. 결제 보내기 (Send Payment)</S.SectionTitle>
+          <S.Label>Invoice (lnbc... or lntb...):</S.Label>
+          <S.Input
+            value={invoiceToSend}
+            onChangeText={setInvoiceToSend}
+            placeholder="lntb1..."
+            multiline
+            numberOfLines={3}
+          />
+          <S.Button
+            onPress={sendPayment}
+            disabled={!status.includes('Running') || !invoiceToSend.trim()}
+            variant="success"
+          >
+            <S.ButtonText variant="primary">결제 보내기 (Send)</S.ButtonText>
+          </S.Button>
+        </S.Card>
 
         <S.ButtonContainer>
           <S.Button onPress={initNode} disabled={status.includes('Running')}>

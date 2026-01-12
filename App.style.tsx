@@ -1,4 +1,5 @@
 import styled, { css } from 'styled-components/native';
+
 import { theme } from './src/theme';
 
 export const Container = styled.SafeAreaView`
@@ -74,21 +75,21 @@ export const ButtonContainer = styled.View`
 `;
 
 interface ButtonProps {
-    variant?: 'primary' | 'secondary' | 'success';
-    disabled?: boolean;
+  variant?: 'primary' | 'secondary' | 'success';
+  disabled?: boolean;
 }
 
 export const Button = styled.TouchableOpacity<ButtonProps>`
   background-color: ${({ variant }) => {
-        switch (variant) {
-            case 'secondary':
-                return theme.colors.button.secondary;
-            case 'success':
-                return theme.colors.button.success;
-            default:
-                return theme.colors.button.primary;
-        }
-    }};
+    switch (variant) {
+      case 'secondary':
+        return theme.colors.button.secondary;
+      case 'success':
+        return theme.colors.button.success;
+      default:
+        return theme.colors.button.primary;
+    }
+  }};
   padding: ${theme.gap.g15}px;
   border-radius: ${theme.radius.r08}px;
   align-items: center;
@@ -99,7 +100,9 @@ export const Button = styled.TouchableOpacity<ButtonProps>`
 
 export const ButtonText = styled.Text<ButtonProps>`
   color: ${({ variant }) =>
-        variant === 'secondary' ? theme.colors.text.primary : theme.colors.text.white};
+    variant === 'secondary'
+      ? theme.colors.text.primary
+      : theme.colors.text.white};
   font-weight: ${theme.font.weight.bold};
   font-size: ${theme.font.size.s16}px;
 `;
@@ -123,5 +126,33 @@ export const LogText = styled.Text`
 `;
 
 export const AddressContainer = styled.View`
-    margin-top: 10px;
+  margin-top: 10px;
+`;
+
+export const SectionTitle = styled.Text`
+  font-size: ${theme.font.size.s16}px;
+  font-weight: ${theme.font.weight.bold};
+  color: ${theme.colors.text.primary};
+  margin-bottom: ${theme.gap.g10}px;
+  margin-top: ${theme.gap.g20}px;
+`;
+
+export const Input = styled.TextInput`
+  background-color: ${theme.colors.background.main};
+  padding: ${theme.gap.g15}px;
+  border-radius: ${theme.radius.r08}px;
+  border-width: 1px;
+  border-color: #ddd;
+  margin-bottom: ${theme.gap.g10}px;
+  font-size: ${theme.font.size.s16}px;
+  color: ${theme.colors.text.primary};
+`;
+
+export const ChannelItem = styled.View`
+  background-color: ${theme.colors.background.main};
+  padding: ${theme.gap.g10}px;
+  border-radius: ${theme.radius.r05}px;
+  margin-bottom: ${theme.gap.g08}px;
+  border-left-width: 4px;
+  border-left-color: ${theme.colors.primary};
 `;
