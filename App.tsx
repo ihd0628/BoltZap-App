@@ -1,6 +1,10 @@
 import 'react-native-get-random-values';
 
+import { Buffer } from 'buffer';
+global.Buffer = Buffer;
+
 import Clipboard from '@react-native-clipboard/clipboard';
+import * as bip39 from 'bip39';
 import { Builder, Config, type Node } from 'ldk-node-rn';
 import {
   type Address,
@@ -10,8 +14,11 @@ import {
 import React, { useState } from 'react';
 import { Alert, StatusBar } from 'react-native';
 import RNFS from 'react-native-fs';
+import * as Keychain from 'react-native-keychain';
 
 import * as S from './App.style';
+
+const KEYCHAIN_SERVICE = 'boltzap_wallet';
 
 // Node instance needs to be kept outside render cycle or in a ref.
 // Keeping it simple here as a module variable for this Hello World.
@@ -26,6 +33,8 @@ const App = (): React.JSX.Element => {
   // On-chain Wallet State
   const [onChainAddress, setOnChainAddress] = useState<string>('');
   const [balance, setBalance] = useState<string>('0');
+  const [mnemonic, setMnemonic] = useState<string>('');
+  const [showMnemonic, setShowMnemonic] = useState<boolean>(false);
 
   // Channel State
   const [peerNodeId, setPeerNodeId] = useState<string>(
@@ -64,23 +73,77 @@ const App = (): React.JSX.Element => {
         '127.0.0.1',
         Math.floor(Math.random() * (60000 - 10000 + 1) + 10000),
       );
-      await config.create(path, logPath, 'testnet', [listeningAddr]);
+      await config.create(path, logPath, 'testnet', [listeningAddr]); // TESTNET
 
       // Esplora를 사용하여 블록체인 데이터 동기화
       const builder = new Builder();
       await builder.fromConfig(config);
 
+      // 니모닉 로드 또는 생성 (Keychain 사용 - 하드웨어 암호화)
+      let storedMnemonic: string | null = null;
+      try {
+        const credentials = await Keychain.getGenericPassword({
+          service: KEYCHAIN_SERVICE,
+        });
+        if (credentials) {
+          storedMnemonic = credentials.password;
+        }
+      } catch (e) {
+        console.log('Keychain read error:', e);
+      }
+
+      if (!storedMnemonic) {
+        // 새 니모닉 생성
+        storedMnemonic = bip39.generateMnemonic(128); // 12 words
+        await Keychain.setGenericPassword('mnemonic', storedMnemonic, {
+          service: KEYCHAIN_SERVICE,
+          accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+        });
+        addLog('🔐 새 시드 생성 완료! 반드시 백업하세요!');
+        setShowMnemonic(true); // 처음 생성 시 자동으로 보여주기
+      } else {
+        addLog('🔐 기존 시드 로드 완료 (보안 저장소)');
+      }
+      setMnemonic(storedMnemonic);
+      await builder.setEntropyBip39Mnemonic(storedMnemonic);
+
       // builder.setNetwork/StoragePath는 Config에서 이미 설정됨
-      await builder.setEsploraServer('https://mempool.space/testnet/api');
+      await builder.setEsploraServer('https://mempool.space/api'); // TESTNET
       await builder.setGossipSourceRgs(
-        'https://rapidsync.lightningdevkit.org/testnet/snapshot',
+        'https://rapidsync.lightningdevkit.org/snapshot', // TESTNET
       );
+
+      // LSP 설정 (Breez) - 자동 채널 관리 및 인바운드 용량 제공
+      // await builder.setLiquiditySourceLsps2(
+      //   '94.23.68.139:9735', // Breez LSP IP:Port
+      //   '031015a7839468a3c266d662d5bb21ea4cea24226936e2864a7ca4f2c3939836e0', // Breez LSP Public Key
+      //   '', // Token (not required for Breez)
+      // );
+      // addLog('🔗 LSP (Breez) 연결 설정 완료');
 
       const node = await builder.build();
       addLog('✅ 노드 빌드 완료');
 
-      // 3. 작
-      await node.start();
+      // 3. 노드 시작 (재시도 로직 포함)
+      const MAX_RETRIES = 3;
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          addLog(`🚀 노드 시작 시도 ${attempt}/${MAX_RETRIES}...`);
+          await node.start();
+          break; // 성공 시 루프 탈출
+        } catch (startError: unknown) {
+          if (
+            startError instanceof Error &&
+            startError.message.includes('FeerateEstimation') &&
+            attempt < MAX_RETRIES
+          ) {
+            addLog('⏳ 수수료 정보 조회 타임아웃, 30초 후 재시도...');
+            await new Promise(resolve => setTimeout(resolve, 60000));
+          } else {
+            throw startError; // 재시도 횟수 초과 또는 다른 에러
+          }
+        }
+      }
       runningNode = node;
 
       setStatus('실행 중 (Running)');
@@ -106,7 +169,26 @@ const App = (): React.JSX.Element => {
     try {
       setIsSyncing(true);
       addLog('🔄 지갑 동기화 중...');
-      await runningNode.syncWallets();
+
+      // 재시도 로직 (Esplora rate limiting 대응)
+      const MAX_RETRIES = 3;
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          await runningNode.syncWallets();
+          break; // 성공 시 루프 탈출
+        } catch (syncError: unknown) {
+          if (
+            syncError instanceof Error &&
+            syncError.message.includes('WalletOperation') &&
+            attempt < MAX_RETRIES
+          ) {
+            addLog(`⏳ 동기화 재시도 ${attempt}/${MAX_RETRIES} (30초 대기)...`);
+            await new Promise(resolve => setTimeout(resolve, 60000));
+          } else {
+            throw syncError;
+          }
+        }
+      }
 
       console.log('runningNode : ', runningNode);
 
@@ -282,6 +364,44 @@ const App = (): React.JSX.Element => {
           <S.Label>노드 ID</S.Label>
           <S.NodeId selectable>{nodeId}</S.NodeId>
         </S.Card>
+
+        {mnemonic ? (
+          <S.Card>
+            <S.SectionTitle>🔐 시드 백업 (Mnemonic Backup)</S.SectionTitle>
+            {showMnemonic ? (
+              <>
+                <S.Invoice selectable style={{ marginBottom: 10 }}>
+                  {mnemonic}
+                </S.Invoice>
+                <S.Button
+                  variant="secondary"
+                  onPress={() => {
+                    Clipboard.setString(mnemonic);
+                    Alert.alert('복사됨', '시드가 클립보드에 복사되었습니다.');
+                  }}
+                >
+                  <S.ButtonText variant="secondary">시드 복사</S.ButtonText>
+                </S.Button>
+                <S.Button
+                  variant="secondary"
+                  onPress={() => setShowMnemonic(false)}
+                  style={{ marginTop: 5 }}
+                >
+                  <S.ButtonText variant="secondary">숨기기</S.ButtonText>
+                </S.Button>
+              </>
+            ) : (
+              <S.Button
+                variant="secondary"
+                onPress={() => setShowMnemonic(true)}
+              >
+                <S.ButtonText variant="secondary">
+                  시드 보기 (위험!)
+                </S.ButtonText>
+              </S.Button>
+            )}
+          </S.Card>
+        ) : null}
 
         <S.Card>
           <S.Label>3. 온체인 지갑 (Testnet Funding)</S.Label>
